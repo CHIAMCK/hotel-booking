@@ -6,28 +6,26 @@ import (
 	"time"
 
 	"github.com/chiamck/hotel-booking/internal/models"
-	"github.com/lib/pq"
 )
 
 var (
-	ErrBookingNotFound      = errors.New("booking not found")
-	ErrRoomNotFound         = errors.New("room not found")
-	ErrRoomNotAvailable     = errors.New("room is not available")
-	ErrBookingOverlap       = errors.New("room is already booked for the selected dates")
-	ErrIdempotencyConflict  = errors.New("idempotency key conflict")
+	ErrBookingNotFound  = errors.New("booking not found")
+	ErrRoomNotFound     = errors.New("room not found")
+	ErrRoomNotAvailable = errors.New("room is not available")
+	ErrBookingOverlap   = errors.New("room is already booked for the selected dates")
 )
 
 type CreateBookingParams struct {
-	RoomID         int
-	CustomerID     int
-	CheckIn        time.Time
-	CheckOut       time.Time
-	IdempotencyKey string
+	RoomID     int
+	CustomerID int
+	CheckIn    time.Time
+	CheckOut   time.Time
 }
 
 type BookingRepository interface {
-	FindByIdempotencyKey(key string) (*models.Booking, error)
 	Create(params CreateBookingParams) (models.Booking, error)
+	// ListBlockingByRoomOverlap returns pending/confirmed bookings that overlap [rangeStart, rangeEnd) in time.
+	ListBlockingByRoomOverlap(roomID int, rangeStart, rangeEnd time.Time) ([]models.Booking, error)
 }
 
 type bookingRepository struct {
@@ -36,24 +34,6 @@ type bookingRepository struct {
 
 func NewBookingRepository(db *sql.DB) BookingRepository {
 	return &bookingRepository{db: db}
-}
-
-func (r *bookingRepository) FindByIdempotencyKey(key string) (*models.Booking, error) {
-	row := r.db.QueryRow(`
-		SELECT id, room_id, customer_id, start_time, end_time, status,
-		       total_amount, price_per_night, COALESCE(idempotency_key, '')
-		FROM bookings
-		WHERE idempotency_key = $1`, key)
-
-	booking, err := scanBooking(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return &booking, nil
 }
 
 func (r *bookingRepository) Create(params CreateBookingParams) (models.Booking, error) {
@@ -93,8 +73,8 @@ func (r *bookingRepository) Create(params CreateBookingParams) (models.Booking, 
 	row := tx.QueryRow(`
 		INSERT INTO bookings (
 			room_id, customer_id, start_time, end_time, status,
-			total_amount, price_per_night, idempotency_key
-		) VALUES ($1, $2, $3, $4, 'confirmed', $5, $6, $7)
+			total_amount, price_per_night
+		) VALUES ($1, $2, $3, $4, 'confirmed', $5, $6)
 		RETURNING id, room_id, customer_id, start_time, end_time, status,
 		          total_amount, price_per_night, COALESCE(idempotency_key, '')`,
 		params.RoomID,
@@ -103,21 +83,10 @@ func (r *bookingRepository) Create(params CreateBookingParams) (models.Booking, 
 		params.CheckOut,
 		totalAmount,
 		basePrice,
-		params.IdempotencyKey,
 	)
 
 	booking, err := scanBooking(row)
 	if err != nil {
-		if pqErr, ok := err.(*pq.Error); ok {
-			switch pqErr.Code {
-			case "23P01":
-				return models.Booking{}, ErrBookingOverlap
-			case "23505":
-				if pqErr.Constraint == "idx_bookings_idempotency_key" {
-					return models.Booking{}, ErrIdempotencyConflict
-				}
-			}
-		}
 		return models.Booking{}, err
 	}
 
@@ -146,4 +115,38 @@ func scanBooking(row bookingScanner) (models.Booking, error) {
 		&booking.IdempotencyKey,
 	)
 	return booking, err
+}
+
+func (r *bookingRepository) ListBlockingByRoomOverlap(roomID int, rangeStart, rangeEnd time.Time) ([]models.Booking, error) {
+	if !rangeEnd.After(rangeStart) {
+		return nil, nil
+	}
+
+	rows, err := r.db.Query(`
+		SELECT id, room_id, customer_id, start_time, end_time, status,
+		       total_amount, price_per_night, COALESCE(idempotency_key, '')
+		FROM bookings
+		WHERE room_id = $1
+		  AND status IN ('pending', 'confirmed')
+		  AND start_time < $3 AND end_time > $2
+		ORDER BY start_time`,
+		roomID, rangeStart, rangeEnd,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []models.Booking
+	for rows.Next() {
+		booking, err := scanBooking(rows)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, booking)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return list, nil
 }

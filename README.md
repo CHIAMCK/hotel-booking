@@ -27,7 +27,6 @@ The API starts on `http://localhost:8080` by default. Set `PORT` to use another 
 
 ```
 POST /api/v1/bookings
-Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000
 Content-Type: application/json
 
 {
@@ -38,9 +37,7 @@ Content-Type: application/json
 }
 ```
 
-Headers:
-
-- `Idempotency-Key` (required) - unique key per booking attempt; retries with the same key return the original booking
+The server derives an idempotency key from `room_id`, `customer_id`, `check_in`, and `check_out` (after parsing dates). Retrying the same JSON returns the original booking without creating a duplicate. Successful creates are recorded in **Redis** for 7 days (not in Postgres); if Redis is unavailable the API may return `503 Service Unavailable`.
 
 Body fields:
 
@@ -52,21 +49,21 @@ Body fields:
 Responses:
 
 - `201 Created` - new booking created
-- `200 OK` - idempotent replay of an existing booking (same `Idempotency-Key`)
+- `200 OK` - idempotent replay of an existing booking (same room, customer, and dates as a prior successful create)
+- `503 Service Unavailable` - Redis idempotency cache error (safe to retry the same request)
 - `409 Conflict` - room unavailable, overlapping booking, or lock not acquired
 
 Double-booking protection:
 
 1. **Redis lock** - serializes concurrent booking attempts per room
 2. **Postgres exclusion constraint** - rejects overlapping `pending`/`confirmed` bookings for the same room
-3. **Idempotency key** - unique index ensures safe retries without duplicate bookings
+3. **Idempotency cache (Redis)** - replay detection for safe HTTP retries without duplicate bookings
 
 Example:
 
 ```sh
 curl -X POST "http://localhost:8080/api/v1/bookings" \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000" \
   -d '{"room_id":2,"customer_id":1,"check_in":"2026-07-01","check_out":"2026-07-06"}'
 ```
 

@@ -16,3 +16,10 @@ func NewRoomService(repo repository.RoomRepository) *RoomService {
 func (s *RoomService) ListRooms() ([]models.Room, error) {
 	return s.repo.List()
 }
+
+func (s *RoomService) RoomExists(id int) (bool, error) {
+	if id <= 0 {
+		return false, nil
+	}
+	return s.repo.Exists(id)
+}

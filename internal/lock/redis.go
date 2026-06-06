@@ -16,9 +16,10 @@ func NewRedisLock(client *redis.Client) *RedisLock {
 	return &RedisLock{client: client}
 }
 
-func (l *RedisLock) TryLock(ctx context.Context, key string, ttl time.Duration) (func(), bool, error) {
+func (l *RedisLock) TryLock(ctx context.Context, key string, exp time.Duration) (func(), bool, error) {
 	token := fmt.Sprintf("%d", time.Now().UnixNano())
-	acquired, err := l.client.SetNX(ctx, key, token, ttl).Result()
+	// SET key token NX with expiration (Redis EX) so the lock is released if the holder crashes.
+	acquired, err := l.client.SetNX(ctx, key, token, exp).Result()
 	if err != nil {
 		return nil, false, err
 	}

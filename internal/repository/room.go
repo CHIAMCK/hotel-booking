@@ -2,12 +2,14 @@ package repository
 
 import (
 	"database/sql"
+	"errors"
 
 	"github.com/chiamck/hotel-booking/internal/models"
 )
 
 type RoomRepository interface {
 	List() ([]models.Room, error)
+	Exists(id int) (bool, error)
 }
 
 type roomRepository struct {
@@ -42,4 +44,16 @@ func (r *roomRepository) List() ([]models.Room, error) {
 	}
 
 	return rooms, nil
+}
+
+func (r *roomRepository) Exists(id int) (bool, error) {
+	var one int
+	err := r.db.QueryRow(`SELECT 1 FROM rooms WHERE id = $1`, id).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }

@@ -2,6 +2,7 @@ package routes
 
 import (
 	"github.com/chiamck/hotel-booking/internal/handlers"
+	"github.com/chiamck/hotel-booking/internal/idempotency"
 	"github.com/chiamck/hotel-booking/internal/lock"
 	"github.com/chiamck/hotel-booking/internal/repository"
 	"github.com/chiamck/hotel-booking/internal/service"
@@ -10,20 +11,21 @@ import (
 )
 
 type Dependencies struct {
-	RoomRepo         repository.RoomRepository
-	RoomCategoryRepo repository.RoomCategoryRepository
-	BookingRepo      repository.BookingRepository
-	Lock             lock.DistributedLock
+	RoomRepo           repository.RoomRepository
+	RoomCategoryRepo   repository.RoomCategoryRepository
+	BookingRepo        repository.BookingRepository
+	Lock               lock.DistributedLock
+	BookingIdempotency idempotency.BookingStore
 }
 
 func SetupRouter(deps Dependencies) *gin.Engine {
 	roomService := service.NewRoomService(deps.RoomRepo)
-	roomHandler := handlers.NewRoomHandler(roomService)
+	bookingService := service.NewBookingService(deps.BookingRepo, deps.Lock, deps.BookingIdempotency)
+	roomHandler := handlers.NewRoomHandler(roomService, bookingService)
 
 	roomCategoryService := service.NewRoomCategoryService(deps.RoomCategoryRepo)
 	roomCategoryHandler := handlers.NewRoomCategoryHandler(roomCategoryService)
 
-	bookingService := service.NewBookingService(deps.BookingRepo, deps.Lock)
 	bookingHandler := handlers.NewBookingHandler(bookingService)
 
 	router := gin.Default()

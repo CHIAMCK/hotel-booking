@@ -3,10 +3,6 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;
 ALTER TABLE bookings
     ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(255);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_idempotency_key
-    ON bookings (idempotency_key)
-    WHERE idempotency_key IS NOT NULL;
-
 ALTER TABLE bookings
     DROP CONSTRAINT IF EXISTS bookings_no_overlap;
 

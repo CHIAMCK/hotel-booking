@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/chiamck/hotel-booking/internal/idempotency"
 	"github.com/chiamck/hotel-booking/internal/lock"
 	"github.com/chiamck/hotel-booking/internal/models"
 	"github.com/chiamck/hotel-booking/internal/repository"
@@ -20,6 +22,10 @@ type stubRoomRepository struct{}
 
 func (stubRoomRepository) List() ([]models.Room, error) {
 	return []models.Room{}, nil
+}
+
+func (stubRoomRepository) Exists(id int) (bool, error) {
+	return id >= 1 && id <= 10, nil
 }
 
 type stubRoomCategoryRepository struct{}
@@ -41,36 +47,65 @@ func (stubRoomCategoryRepository) Search(params repository.RoomCategorySearchPar
 
 type stubBookingRepository struct{}
 
-func (stubBookingRepository) FindByIdempotencyKey(key string) (*models.Booking, error) {
-	return nil, nil
-}
-
 func (stubBookingRepository) Create(params repository.CreateBookingParams) (models.Booking, error) {
 	return models.Booking{
-		ID:             99,
-		RoomID:         params.RoomID,
-		CustomerID:     params.CustomerID,
-		StartTime:      params.CheckIn,
-		EndTime:        params.CheckOut,
-		Status:         "confirmed",
-		TotalAmount:    750,
-		PricePerNight:  150,
-		IdempotencyKey: params.IdempotencyKey,
+		ID:            99,
+		RoomID:        params.RoomID,
+		CustomerID:    params.CustomerID,
+		StartTime:     params.CheckIn,
+		EndTime:       params.CheckOut,
+		Status:        "confirmed",
+		TotalAmount:   750,
+		PricePerNight: 150,
 	}, nil
+}
+
+func (stubBookingRepository) ListBlockingByRoomOverlap(roomID int, rangeStart, rangeEnd time.Time) ([]models.Booking, error) {
+	return nil, nil
 }
 
 type stubLocker struct{}
 
-func (stubLocker) TryLock(ctx context.Context, key string, ttl time.Duration) (func(), bool, error) {
+func (stubLocker) TryLock(ctx context.Context, key string, exp time.Duration) (func(), bool, error) {
 	return func() {}, true, nil
 }
 
+type memoryIdempotencyStore struct {
+	mu sync.Mutex
+	m  map[string]models.Booking
+}
+
+func newMemoryIdempotencyStore() *memoryIdempotencyStore {
+	return &memoryIdempotencyStore{m: make(map[string]models.Booking)}
+}
+
+func (s *memoryIdempotencyStore) GetBooking(ctx context.Context, idempotencyKey string) (*models.Booking, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.m[idempotencyKey]
+	if !ok {
+		return nil, nil
+	}
+	cp := b
+	return &cp, nil
+}
+
+func (s *memoryIdempotencyStore) SetBooking(ctx context.Context, idempotencyKey string, b models.Booking, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[idempotencyKey] = b
+	return nil
+}
+
+var _ idempotency.BookingStore = (*memoryIdempotencyStore)(nil)
+
 func setupTestRouter() *gin.Engine {
 	return routes.SetupRouter(routes.Dependencies{
-		RoomRepo:         stubRoomRepository{},
-		RoomCategoryRepo: stubRoomCategoryRepository{},
-		BookingRepo:      stubBookingRepository{},
-		Lock:             stubLocker{},
+		RoomRepo:           stubRoomRepository{},
+		RoomCategoryRepo:   stubRoomCategoryRepository{},
+		BookingRepo:        stubBookingRepository{},
+		Lock:               stubLocker{},
+		BookingIdempotency: newMemoryIdempotencyStore(),
 	})
 }
 
@@ -105,6 +140,44 @@ func TestRoomsRoute(t *testing.T) {
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+}
+
+func TestRoomAvailabilityRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	router := setupTestRouter()
+	response := httptest.NewRecorder()
+	request, err := http.NewRequest(http.MethodGet, "/api/v1/rooms/2/availability?from=2026-07-01&to=2026-07-10", nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+
+	if cc := response.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("expected Cache-Control no-store, got %q", cc)
+	}
+}
+
+func TestRoomAvailabilityRouteNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	router := setupTestRouter()
+	response := httptest.NewRecorder()
+	request, err := http.NewRequest(http.MethodGet, "/api/v1/rooms/99/availability", nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, response.Code)
 	}
 }
 
@@ -221,37 +294,11 @@ func TestCreateBookingRoute(t *testing.T) {
 		t.Fatalf("create request: %v", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Idempotency-Key", "test-key-1")
 
 	router.ServeHTTP(response, request)
 
 	if response.Code != http.StatusCreated {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, response.Code, response.Body.String())
-	}
-}
-
-func TestCreateBookingRouteRequiresIdempotencyKey(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	body := bytes.NewBufferString(`{
-		"room_id": 2,
-		"customer_id": 1,
-		"check_in": "2026-07-01",
-		"check_out": "2026-07-06"
-	}`)
-
-	router := setupTestRouter()
-	response := httptest.NewRecorder()
-	request, err := http.NewRequest(http.MethodPost, "/api/v1/bookings", body)
-	if err != nil {
-		t.Fatalf("create request: %v", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-
-	router.ServeHTTP(response, request)
-
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.Code)
 	}
 }
 
