@@ -30,7 +30,7 @@ func (h *BookingHandler) Create(c *gin.Context) {
 		return
 	}
 
-	result, err := h.service.Create(c.Request.Context(), service.CreateBookingInput{
+	booking, err := h.service.Create(c.Request.Context(), service.CreateBookingInput{
 		RoomID:     req.RoomID,
 		CustomerID: req.CustomerID,
 		CheckIn:    req.CheckIn,
@@ -53,10 +53,5 @@ func (h *BookingHandler) Create(c *gin.Context) {
 		return
 	}
 
-	status := http.StatusOK
-	if result.Created {
-		status = http.StatusCreated
-	}
-
-	c.JSON(status, result)
+	c.JSON(http.StatusCreated, booking)
 }

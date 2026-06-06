@@ -4,21 +4,12 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/chiamck/hotel-booking/internal/models"
 	"github.com/chiamck/hotel-booking/internal/service"
 )
 
 type stubRoomRepo struct {
-	rooms  []models.Room
 	exists map[int]bool
 	err    error
-}
-
-func (s *stubRoomRepo) List() ([]models.Room, error) {
-	if s.err != nil {
-		return nil, s.err
-	}
-	return s.rooms, nil
 }
 
 func (s *stubRoomRepo) Exists(id int) (bool, error) {
@@ -26,21 +17,6 @@ func (s *stubRoomRepo) Exists(id int) (bool, error) {
 		return false, s.err
 	}
 	return s.exists[id], nil
-}
-
-func TestRoomServiceListRooms(t *testing.T) {
-	repo := &stubRoomRepo{
-		rooms: []models.Room{{ID: 1, Number: "101", Status: "available"}},
-	}
-	svc := service.NewRoomService(repo)
-
-	rooms, err := svc.ListRooms()
-	if err != nil {
-		t.Fatalf("ListRooms: %v", err)
-	}
-	if len(rooms) != 1 || rooms[0].Number != "101" {
-		t.Fatalf("unexpected rooms: %+v", rooms)
-	}
 }
 
 func TestRoomServiceRoomExistsRejectsNonPositiveID(t *testing.T) {

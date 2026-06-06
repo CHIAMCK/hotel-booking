@@ -20,10 +20,6 @@ import (
 
 type stubRoomRepository struct{}
 
-func (stubRoomRepository) List() ([]models.Room, error) {
-	return []models.Room{}, nil
-}
-
 func (stubRoomRepository) Exists(id int) (bool, error) {
 	return id >= 1 && id <= 10, nil
 }
@@ -72,28 +68,24 @@ func (stubLocker) TryLock(ctx context.Context, key string, exp time.Duration) (f
 
 type memoryIdempotencyStore struct {
 	mu sync.Mutex
-	m  map[string]models.Booking
+	m  map[string]struct{}
 }
 
 func newMemoryIdempotencyStore() *memoryIdempotencyStore {
-	return &memoryIdempotencyStore{m: make(map[string]models.Booking)}
+	return &memoryIdempotencyStore{m: make(map[string]struct{})}
 }
 
-func (s *memoryIdempotencyStore) GetBooking(ctx context.Context, idempotencyKey string) (*models.Booking, error) {
+func (s *memoryIdempotencyStore) CheckIdempotent(ctx context.Context, idempotencyKey string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	b, ok := s.m[idempotencyKey]
-	if !ok {
-		return nil, nil
-	}
-	cp := b
-	return &cp, nil
+	_, ok := s.m[idempotencyKey]
+	return ok, nil
 }
 
-func (s *memoryIdempotencyStore) SetBooking(ctx context.Context, idempotencyKey string, b models.Booking, ttl time.Duration) error {
+func (s *memoryIdempotencyStore) SetIdempotent(ctx context.Context, idempotencyKey string, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.m[idempotencyKey] = b
+	s.m[idempotencyKey] = struct{}{}
 	return nil
 }
 
@@ -115,23 +107,6 @@ func TestHealthRoute(t *testing.T) {
 	router := setupTestRouter()
 	response := httptest.NewRecorder()
 	request, err := http.NewRequest(http.MethodGet, "/health", nil)
-	if err != nil {
-		t.Fatalf("create request: %v", err)
-	}
-
-	router.ServeHTTP(response, request)
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
-	}
-}
-
-func TestRoomsRoute(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	router := setupTestRouter()
-	response := httptest.NewRecorder()
-	request, err := http.NewRequest(http.MethodGet, "/api/v1/rooms", nil)
 	if err != nil {
 		t.Fatalf("create request: %v", err)
 	}

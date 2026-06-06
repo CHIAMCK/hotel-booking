@@ -2,7 +2,6 @@ package repository_test
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"testing"
 	"time"
@@ -32,36 +31,9 @@ func openTestRedis(t *testing.T) *lock.RedisLock {
 	return lock.NewRedisLock(client)
 }
 
-func applyBookingConstraints(t *testing.T, db *sql.DB) {
-	t.Helper()
-
-	if _, err := db.Exec(`
-		CREATE EXTENSION IF NOT EXISTS btree_gist;
-
-		ALTER TABLE bookings
-			ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(255);
-
-		DROP INDEX IF EXISTS idx_bookings_idempotency_key;
-
-		ALTER TABLE bookings
-			DROP CONSTRAINT IF EXISTS bookings_no_overlap;
-
-		ALTER TABLE bookings
-			ADD CONSTRAINT bookings_no_overlap
-			EXCLUDE USING gist (
-				room_id WITH =,
-				tstzrange(start_time, end_time, '[)') WITH &&
-			)
-			WHERE (status IN ('pending', 'confirmed'));
-	`); err != nil {
-		t.Fatalf("apply booking constraints: %v", err)
-	}
-}
-
 func TestBookingRepositoryCreate(t *testing.T) {
 	db := openTestDB(t)
 	resetSearchFixtures(t, db)
-	applyBookingConstraints(t, db)
 
 	repo := repository.NewBookingRepository(db)
 	checkIn := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
@@ -84,7 +56,6 @@ func TestBookingRepositoryCreate(t *testing.T) {
 func TestBookingRepositoryRejectsOverlap(t *testing.T) {
 	db := openTestDB(t)
 	resetSearchFixtures(t, db)
-	applyBookingConstraints(t, db)
 
 	repo := repository.NewBookingRepository(db)
 	checkIn := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
@@ -113,7 +84,6 @@ func TestBookingRepositoryRejectsOverlap(t *testing.T) {
 func TestBookingRepositoryWithRedisLock(t *testing.T) {
 	db := openTestDB(t)
 	resetSearchFixtures(t, db)
-	applyBookingConstraints(t, db)
 
 	redisLock := openTestRedis(t)
 	repo := repository.NewBookingRepository(db)

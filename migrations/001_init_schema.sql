@@ -45,6 +45,8 @@ CREATE TABLE rooms (
 CREATE INDEX idx_rooms_category_id ON rooms(category_id);
 CREATE INDEX idx_rooms_hotel_id ON rooms(hotel_id);
 
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
 CREATE TABLE bookings (
     id SERIAL PRIMARY KEY,
     room_id INT NOT NULL REFERENCES rooms(id),
@@ -54,10 +56,19 @@ CREATE TABLE bookings (
     customer_id INT NOT NULL REFERENCES customers(id),
     total_amount NUMERIC(10, 2) NOT NULL CHECK (total_amount >= 0),
     price_per_night NUMERIC(10, 2) NOT NULL CHECK (price_per_night >= 0),
+    idempotency_key VARCHAR(255),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CHECK (end_time > start_time)
 );
+
+ALTER TABLE bookings
+    ADD CONSTRAINT bookings_no_overlap
+    EXCLUDE USING gist (
+        room_id WITH =,
+        tstzrange(start_time, end_time, '[)') WITH &&
+    )
+    WHERE (status IN ('pending', 'confirmed'));
 
 CREATE INDEX idx_bookings_room_status_dates ON bookings(room_id, status, start_time, end_time);
 CREATE INDEX idx_bookings_customer_id ON bookings(customer_id);

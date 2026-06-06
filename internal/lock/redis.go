@@ -2,7 +2,6 @@ package lock
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -17,9 +16,8 @@ func NewRedisLock(client *redis.Client) *RedisLock {
 }
 
 func (l *RedisLock) TryLock(ctx context.Context, key string, exp time.Duration) (func(), bool, error) {
-	token := fmt.Sprintf("%d", time.Now().UnixNano())
-	// SET key token NX with expiration (Redis EX) so the lock is released if the holder crashes.
-	acquired, err := l.client.SetNX(ctx, key, token, exp).Result()
+	// SET key NX with expiration so the lock is released if the holder crashes.
+	acquired, err := l.client.SetNX(ctx, key, "1", exp).Result()
 	if err != nil {
 		return nil, false, err
 	}
@@ -28,13 +26,7 @@ func (l *RedisLock) TryLock(ctx context.Context, key string, exp time.Duration) 
 	}
 
 	unlock := func() {
-		script := redis.NewScript(`
-			if redis.call("GET", KEYS[1]) == ARGV[1] then
-				return redis.call("DEL", KEYS[1])
-			end
-			return 0
-		`)
-		_ = script.Run(context.Background(), l.client, []string{key}, token).Err()
+		_ = l.client.Del(context.Background(), key).Err()
 	}
 
 	return unlock, true, nil

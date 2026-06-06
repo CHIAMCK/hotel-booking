@@ -19,7 +19,7 @@ The API starts on `http://localhost:8080` by default. Set `PORT` to use another 
 
 - `GET /` - welcome response
 - `GET /health` - health check
-- `GET /api/v1/rooms` - sample room listing
+- `GET /api/v1/rooms/:id/availability` - unavailable dates for a room in a date window
 - `GET /api/v1/room-categories` - search available room categories by date range and guest count
 - `POST /api/v1/bookings` - create a room booking (Redis lock + DB constraints + idempotent)
 
@@ -65,6 +65,25 @@ Example:
 curl -X POST "http://localhost:8080/api/v1/bookings" \
   -H "Content-Type: application/json" \
   -d '{"room_id":2,"customer_id":1,"check_in":"2026-07-01","check_out":"2026-07-06"}'
+```
+
+### Room availability
+
+```
+GET /api/v1/rooms/2/availability?from=2026-07-01&to=2026-07-10
+```
+
+Query parameters:
+
+- `from` (optional) - start of window (`YYYY-MM-DD`, UTC); defaults to today (UTC)
+- `to` (optional) - end of window (`YYYY-MM-DD`, UTC); defaults to `from` + 179 days
+
+Returns `unavailable_dates` — calendar nights with a pending or confirmed booking for that room.
+
+Example:
+
+```sh
+curl "http://localhost:8080/api/v1/rooms/2/availability?from=2026-07-01&to=2026-07-10"
 ```
 
 ### Search room categories

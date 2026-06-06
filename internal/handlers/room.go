@@ -18,16 +18,6 @@ func NewRoomHandler(roomService *service.RoomService, bookingService *service.Bo
 	return &RoomHandler{roomService: roomService, bookingService: bookingService}
 }
 
-func (h *RoomHandler) List(c *gin.Context) {
-	rooms, err := h.roomService.ListRooms()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list rooms"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"rooms": rooms})
-}
-
 // Availability returns dates in the requested window (UTC) where the room has a pending or confirmed stay night.
 // Query: optional from=YYYY-MM-DD, to=YYYY-MM-DD (defaults: from=today UTC, to=from+179 days). Responses are uncached for up-to-date availability.
 func (h *RoomHandler) Availability(c *gin.Context) {

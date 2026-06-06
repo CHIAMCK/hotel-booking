@@ -10,6 +10,5 @@ func registerRoomRoutes(router *gin.RouterGroup, roomHandler *handlers.RoomHandl
 	rooms := router.Group("/rooms")
 	{
 		rooms.GET("/:id/availability", roomHandler.Availability)
-		rooms.GET("", roomHandler.List)
 	}
 }

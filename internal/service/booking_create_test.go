@@ -37,20 +37,20 @@ func (s *createBookingRepoStub) ListBlockingByRoomOverlap(int, time.Time, time.T
 }
 
 type createIdempotencyStub struct {
-	booking *models.Booking
-	setErr  error
-	getErr  error
-	sets    int
+	used   bool
+	setErr error
+	getErr error
+	sets   int
 }
 
-func (s *createIdempotencyStub) GetBooking(context.Context, string) (*models.Booking, error) {
+func (s *createIdempotencyStub) CheckIdempotent(context.Context, string) (bool, error) {
 	if s.getErr != nil {
-		return nil, s.getErr
+		return false, s.getErr
 	}
-	return s.booking, nil
+	return s.used, nil
 }
 
-func (s *createIdempotencyStub) SetBooking(context.Context, string, models.Booking, time.Duration) error {
+func (s *createIdempotencyStub) SetIdempotent(context.Context, string, time.Duration) error {
 	s.sets++
 	return s.setErr
 }
@@ -143,6 +143,7 @@ func TestBookingErrorMessageAndClassifiers(t *testing.T) {
 		{repository.ErrRoomNotAvailable, "room is not available", false, true, false, false},
 		{repository.ErrBookingOverlap, "room is already booked for the selected dates", false, true, false, false},
 		{ErrBookingLockNotAcquired, "another booking is in progress for this room, please retry", false, true, false, false},
+		{ErrDuplicateBookingRequest, "this booking request was already processed", false, true, false, false},
 		{ErrIdempotencyCache, "idempotency cache unavailable", false, false, false, true},
 	}
 
@@ -177,23 +178,19 @@ func TestAvailabilityErrorMessageAndClassifiers(t *testing.T) {
 	}
 }
 
-func TestCreateSkipsRepoWhenIdempotencyHit(t *testing.T) {
-	cached := models.Booking{ID: 5, RoomID: 2, CustomerID: 1, Status: "confirmed"}
+func TestCreateRejectsDuplicateIdempotencyKey(t *testing.T) {
 	repo := &createBookingRepoStub{}
-	idem := &createIdempotencyStub{booking: &cached}
+	idem := &createIdempotencyStub{used: true}
 	svc := NewBookingService(repo, &createLockStub{acquired: true}, idem)
 
-	result, err := svc.Create(context.Background(), CreateBookingInput{
+	_, err := svc.Create(context.Background(), CreateBookingInput{
 		RoomID:     2,
 		CustomerID: 1,
 		CheckIn:    "2026-07-01",
 		CheckOut:   "2026-07-06",
 	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if result.Created || result.Booking.ID != 5 {
-		t.Fatalf("expected cached replay, got %+v", result)
+	if err != ErrDuplicateBookingRequest {
+		t.Fatalf("expected duplicate booking error, got %v", err)
 	}
 	if repo.calls != 0 {
 		t.Fatalf("expected repo not called, calls=%d", repo.calls)
@@ -236,7 +233,7 @@ func TestCreateCachesBookingAfterInsert(t *testing.T) {
 	idem := &createIdempotencyStub{}
 	svc := NewBookingService(repo, &createLockStub{acquired: true}, idem)
 
-	result, err := svc.Create(context.Background(), CreateBookingInput{
+	_, err := svc.Create(context.Background(), CreateBookingInput{
 		RoomID:     2,
 		CustomerID: 1,
 		CheckIn:    "2026-07-01",
@@ -245,7 +242,7 @@ func TestCreateCachesBookingAfterInsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if !result.Created || repo.calls != 1 || idem.sets != 1 {
-		t.Fatalf("expected create + cache set, created=%v calls=%d sets=%d", result.Created, repo.calls, idem.sets)
+	if repo.calls != 1 || idem.sets != 1 {
+		t.Fatalf("expected create + mark used, calls=%d sets=%d", repo.calls, idem.sets)
 	}
 }

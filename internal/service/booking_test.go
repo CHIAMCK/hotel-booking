@@ -56,28 +56,24 @@ var _ repository.BookingRepository = (*availabilityStubRepo)(nil)
 
 type memoryIdempotencyStore struct {
 	mu sync.Mutex
-	m  map[string]models.Booking
+	m  map[string]struct{}
 }
 
 func newMemoryIdempotencyStore() *memoryIdempotencyStore {
-	return &memoryIdempotencyStore{m: make(map[string]models.Booking)}
+	return &memoryIdempotencyStore{m: make(map[string]struct{})}
 }
 
-func (s *memoryIdempotencyStore) GetBooking(ctx context.Context, idempotencyKey string) (*models.Booking, error) {
+func (s *memoryIdempotencyStore) CheckIdempotent(ctx context.Context, idempotencyKey string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	b, ok := s.m[idempotencyKey]
-	if !ok {
-		return nil, nil
-	}
-	cp := b
-	return &cp, nil
+	_, ok := s.m[idempotencyKey]
+	return ok, nil
 }
 
-func (s *memoryIdempotencyStore) SetBooking(ctx context.Context, idempotencyKey string, b models.Booking, ttl time.Duration) error {
+func (s *memoryIdempotencyStore) SetIdempotent(ctx context.Context, idempotencyKey string, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.m[idempotencyKey] = b
+	s.m[idempotencyKey] = struct{}{}
 	return nil
 }
 
@@ -99,7 +95,7 @@ func TestBookingServiceCreate(t *testing.T) {
 	idem := newMemoryIdempotencyStore()
 	svc := service.NewBookingService(repo, &stubLocker{acquired: true}, idem)
 
-	result, err := svc.Create(context.Background(), service.CreateBookingInput{
+	booking, err := svc.Create(context.Background(), service.CreateBookingInput{
 		RoomID:     2,
 		CustomerID: 1,
 		CheckIn:    "2026-07-01",
@@ -108,21 +104,18 @@ func TestBookingServiceCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create booking: %v", err)
 	}
-	if !result.Created || result.Booking.ID != 1 {
-		t.Fatalf("expected created booking, got %+v", result)
+	if booking.ID != 1 {
+		t.Fatalf("expected created booking, got booking=%+v", booking)
 	}
 
-	replay, err := svc.Create(context.Background(), service.CreateBookingInput{
+	_, err = svc.Create(context.Background(), service.CreateBookingInput{
 		RoomID:     2,
 		CustomerID: 1,
 		CheckIn:    "2026-07-01",
 		CheckOut:   "2026-07-06",
 	})
-	if err != nil {
-		t.Fatalf("replay booking: %v", err)
-	}
-	if replay.Created || replay.Booking.ID != 1 {
-		t.Fatalf("expected idempotent replay, got %+v", replay)
+	if err != service.ErrDuplicateBookingRequest {
+		t.Fatalf("expected duplicate booking error, got %v", err)
 	}
 }
 
@@ -217,11 +210,11 @@ func TestBookingServiceCreateRejectsInvalidDateRange(t *testing.T) {
 
 type failingIdempotencyStore struct{}
 
-func (failingIdempotencyStore) GetBooking(context.Context, string) (*models.Booking, error) {
-	return nil, errors.New("redis down")
+func (failingIdempotencyStore) CheckIdempotent(context.Context, string) (bool, error) {
+	return false, errors.New("redis down")
 }
 
-func (failingIdempotencyStore) SetBooking(context.Context, string, models.Booking, time.Duration) error {
+func (failingIdempotencyStore) SetIdempotent(context.Context, string, time.Duration) error {
 	return errors.New("redis down")
 }
 

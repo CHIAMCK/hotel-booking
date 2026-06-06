@@ -27,6 +27,7 @@ var (
 	ErrInvalidRoomID              = errors.New("room_id must be a positive integer")
 	ErrInvalidCustomerID          = errors.New("customer_id must be a positive integer")
 	ErrBookingLockNotAcquired     = errors.New("could not acquire booking lock")
+	ErrDuplicateBookingRequest    = errors.New("duplicate booking request")
 	ErrIdempotencyCache           = errors.New("idempotency cache unavailable")
 	ErrInvalidAvailabilityFrom    = errors.New("from must be a valid date in YYYY-MM-DD format")
 	ErrInvalidAvailabilityTo      = errors.New("to must be a valid date in YYYY-MM-DD format")
@@ -39,11 +40,6 @@ type CreateBookingInput struct {
 	CustomerID int
 	CheckIn    string
 	CheckOut   string
-}
-
-type CreateBookingResult struct {
-	Booking models.Booking `json:"booking"`
-	Created bool           `json:"created"`
 }
 
 // RoomAvailabilityResponse lists calendar dates (UTC, YYYY-MM-DD) on which the room has an active stay night.
@@ -64,42 +60,41 @@ func NewBookingService(repo repository.BookingRepository, locker lock.Distribute
 	return &BookingService{repo: repo, lock: locker, idem: idem}
 }
 
-func (s *BookingService) Create(ctx context.Context, input CreateBookingInput) (CreateBookingResult, error) {
+func (s *BookingService) Create(ctx context.Context, input CreateBookingInput) (models.Booking, error) {
 	params, idemKey, err := parseCreateBookingInput(input)
 	if err != nil {
-		return CreateBookingResult{}, err
+		return models.Booking{}, err
 	}
 
 	lockKey := bookingLockKey(params.RoomID)
 	unlock, acquired, err := s.lock.TryLock(ctx, lockKey, bookingLockExp)
 	if err != nil {
-		return CreateBookingResult{}, err
+		return models.Booking{}, err
 	}
 
 	if !acquired {
-		return CreateBookingResult{}, ErrBookingLockNotAcquired
+		return models.Booking{}, ErrBookingLockNotAcquired
 	}
 	defer unlock()
 
-	existing, err := s.idem.GetBooking(ctx, idemKey)
+	used, err := s.idem.CheckIdempotent(ctx, idemKey)
 	if err != nil {
-		return CreateBookingResult{}, fmt.Errorf("%w: %v", ErrIdempotencyCache, err)
+		return models.Booking{}, fmt.Errorf("%w: %v", ErrIdempotencyCache, err)
 	}
-
-	if existing != nil {
-		return CreateBookingResult{Booking: *existing, Created: false}, nil
+	if used {
+		return models.Booking{}, ErrDuplicateBookingRequest
 	}
 
 	booking, err := s.repo.Create(params)
 	if err != nil {
-		return CreateBookingResult{}, err
+		return models.Booking{}, err
 	}
 
-	if err := s.idem.SetBooking(ctx, idemKey, booking, bookingIdempotencyCacheTTL); err != nil {
-		return CreateBookingResult{}, fmt.Errorf("%w: %v", ErrIdempotencyCache, err)
+	if err := s.idem.SetIdempotent(ctx, idemKey, bookingIdempotencyCacheTTL); err != nil {
+		return models.Booking{}, fmt.Errorf("%w: %v", ErrIdempotencyCache, err)
 	}
 
-	return CreateBookingResult{Booking: booking, Created: true}, nil
+	return booking, nil
 }
 
 // GetRoomAvailability loads pending/confirmed bookings for the room in the window and returns occupied nights as dates.
@@ -268,6 +263,8 @@ func BookingErrorMessage(err error) string {
 		return "room is already booked for the selected dates"
 	case errors.Is(err, ErrBookingLockNotAcquired):
 		return "another booking is in progress for this room, please retry"
+	case errors.Is(err, ErrDuplicateBookingRequest):
+		return "this booking request was already processed"
 	case errors.Is(err, ErrIdempotencyCache):
 		return "idempotency cache unavailable"
 	default:
@@ -292,7 +289,8 @@ func IsBookingConflictError(err error) bool {
 	switch {
 	case errors.Is(err, repository.ErrRoomNotAvailable),
 		errors.Is(err, repository.ErrBookingOverlap),
-		errors.Is(err, ErrBookingLockNotAcquired):
+		errors.Is(err, ErrBookingLockNotAcquired),
+		errors.Is(err, ErrDuplicateBookingRequest):
 		return true
 	default:
 		return false
