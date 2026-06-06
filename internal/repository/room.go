@@ -1,34 +1,45 @@
 package repository
 
-import "github.com/chiamck/hotel-booking/internal/models"
+import (
+	"database/sql"
+
+	"github.com/chiamck/hotel-booking/internal/models"
+)
 
 type RoomRepository interface {
 	List() ([]models.Room, error)
 }
 
-type InMemoryRoomRepository struct {
-	rooms []models.Room
+type roomRepository struct {
+	db *sql.DB
 }
 
-func NewInMemoryRoomRepository() *InMemoryRoomRepository {
-	return &InMemoryRoomRepository{
-		rooms: []models.Room{
-			{
-				ID:          1,
-				Name:        "Deluxe King",
-				Description: "A spacious room with a king bed.",
-				Price:       180,
-			},
-			{
-				ID:          2,
-				Name:        "Twin Suite",
-				Description: "A comfortable suite with two twin beds.",
-				Price:       220,
-			},
-		},
+func NewRoomRepository(db *sql.DB) RoomRepository {
+	return &roomRepository{db: db}
+}
+
+func (r *roomRepository) List() ([]models.Room, error) {
+	rows, err := r.db.Query(`
+		SELECT id, hotel_id, category_id, number, status
+		FROM rooms
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
 	}
-}
+	defer rows.Close()
 
-func (r *InMemoryRoomRepository) List() ([]models.Room, error) {
-	return r.rooms, nil
+	var rooms []models.Room
+	for rows.Next() {
+		var room models.Room
+		if err := rows.Scan(&room.ID, &room.HotelID, &room.CategoryID, &room.Number, &room.Status); err != nil {
+			return nil, err
+		}
+		rooms = append(rooms, room)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return rooms, nil
 }

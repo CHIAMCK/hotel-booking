@@ -8,15 +8,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func SetupRouter() *gin.Engine {
-	roomRepo := repository.NewInMemoryRoomRepository()
+func SetupRouter(roomRepo repository.RoomRepository, roomCategoryRepo repository.RoomCategoryRepository) *gin.Engine {
 	roomService := service.NewRoomService(roomRepo)
 	roomHandler := handlers.NewRoomHandler(roomService)
+
+	roomCategoryService := service.NewRoomCategoryService(roomCategoryRepo)
+	roomCategoryHandler := handlers.NewRoomCategoryHandler(roomCategoryService)
 
 	router := gin.Default()
 
 	registerRootRoutes(router)
-	registerV1Routes(router.Group("/api/v1"), roomHandler)
+	registerV1Routes(router.Group("/api/v1"), roomHandler, roomCategoryHandler)
 
 	return router
 }
@@ -26,6 +28,7 @@ func registerRootRoutes(router *gin.Engine) {
 	router.GET("/health", handlers.Health)
 }
 
-func registerV1Routes(router *gin.RouterGroup, roomHandler *handlers.RoomHandler) {
+func registerV1Routes(router *gin.RouterGroup, roomHandler *handlers.RoomHandler, roomCategoryHandler *handlers.RoomCategoryHandler) {
 	registerRoomRoutes(router, roomHandler)
+	registerRoomCategoryRoutes(router, roomCategoryHandler)
 }
