@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/chiamck/hotel-booking/internal/models"
 	"github.com/chiamck/hotel-booking/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -24,6 +23,7 @@ type roomCategorySearchQuery struct {
 	CheckIn  string `form:"check_in" binding:"required"`
 	CheckOut string `form:"check_out" binding:"required"`
 	Guests   string `form:"guests" binding:"required"`
+	Page     string `form:"page"`
 	Limit    string `form:"limit"`
 }
 
@@ -46,7 +46,16 @@ func (h *RoomCategoryHandler) Search(c *gin.Context) {
 		return
 	}
 
-	limit := 0
+	page := 1
+	if query.Page != "" {
+		page, err = strconv.Atoi(query.Page)
+		if err != nil || page < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "page must be a positive integer"})
+			return
+		}
+	}
+
+	limit := 10
 	if query.Limit != "" {
 		limit, err = strconv.Atoi(query.Limit)
 		if err != nil {
@@ -55,11 +64,12 @@ func (h *RoomCategoryHandler) Search(c *gin.Context) {
 		}
 	}
 
-	categories, err := h.service.SearchCategories(service.RoomCategorySearchInput{
+	result, err := h.service.SearchCategories(service.RoomCategorySearchInput{
 		HotelID:  hotelID,
 		Guests:   guests,
 		CheckIn:  query.CheckIn,
 		CheckOut: query.CheckOut,
+		Page:     page,
 		Limit:    limit,
 	})
 	if err != nil {
@@ -70,7 +80,8 @@ func (h *RoomCategoryHandler) Search(c *gin.Context) {
 			errors.Is(err, service.ErrInvalidCheckIn),
 			errors.Is(err, service.ErrInvalidCheckOut),
 			errors.Is(err, service.ErrInvalidDateRange),
-			errors.Is(err, service.ErrInvalidLimit):
+			errors.Is(err, service.ErrInvalidLimit),
+			errors.Is(err, service.ErrInvalidPage):
 			validationErr = err
 		}
 		if validationErr != nil {
@@ -82,9 +93,5 @@ func (h *RoomCategoryHandler) Search(c *gin.Context) {
 		return
 	}
 
-	if categories == nil {
-		categories = []models.RoomCategorySearchResult{}
-	}
-
-	c.JSON(http.StatusOK, gin.H{"categories": categories})
+	c.JSON(http.StatusOK, result)
 }

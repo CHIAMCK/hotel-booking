@@ -12,11 +12,12 @@ type RoomCategorySearchParams struct {
 	Guests   int
 	CheckIn  time.Time
 	CheckOut time.Time
+	Page     int
 	Limit    int
 }
 
 type RoomCategoryRepository interface {
-	Search(params RoomCategorySearchParams) ([]models.RoomCategorySearchResult, error)
+	Search(params RoomCategorySearchParams) (models.RoomCategorySearchPage, error)
 }
 
 type roomCategoryRepository struct {
@@ -27,45 +28,64 @@ func NewRoomCategoryRepository(db *sql.DB) RoomCategoryRepository {
 	return &roomCategoryRepository{db: db}
 }
 
-func (r *roomCategoryRepository) Search(params RoomCategorySearchParams) ([]models.RoomCategorySearchResult, error) {
-	rows, err := r.db.Query(`
+const roomCategorySearchBaseQuery = `
+	FROM room_categories rc
+	JOIN rooms r
+		ON r.category_id = rc.id
+	   AND r.hotel_id = rc.hotel_id
+	   AND r.status = 'available'
+	   AND NOT EXISTS (
+		   SELECT 1
+		   FROM bookings b
+		   WHERE b.room_id = r.id
+			 AND b.status IN ('pending', 'confirmed')
+			 AND b.start_time < $4
+			 AND b.end_time > $3
+	   )
+	WHERE rc.hotel_id = $1
+	  AND rc.max_person >= $2
+	GROUP BY rc.id, rc.name, rc.max_person, rc.base_price
+	HAVING COUNT(r.id) > 0`
+
+func (r *roomCategoryRepository) Search(params RoomCategorySearchParams) (models.RoomCategorySearchPage, error) {
+	var total int
+	countQuery := `SELECT COUNT(*) FROM (SELECT rc.id ` + roomCategorySearchBaseQuery + `) AS matching_categories`
+	if err := r.db.QueryRow(
+		countQuery,
+		params.HotelID,
+		params.Guests,
+		params.CheckIn,
+		params.CheckOut,
+	).Scan(&total); err != nil {
+		return models.RoomCategorySearchPage{}, err
+	}
+
+	offset := (params.Page - 1) * params.Limit
+	dataQuery := `
 		SELECT
 			rc.id,
 			rc.name,
 			rc.max_person,
 			rc.base_price,
-			COUNT(r.id) AS available_count
-		FROM room_categories rc
-		JOIN rooms r
-			ON r.category_id = rc.id
-		   AND r.hotel_id = rc.hotel_id
-		   AND r.status = 'available'
-		   AND NOT EXISTS (
-			   SELECT 1
-			   FROM bookings b
-			   WHERE b.room_id = r.id
-				 AND b.status IN ('pending', 'confirmed')
-				 AND b.start_time < $4
-				 AND b.end_time > $3
-		   )
-		WHERE rc.hotel_id = $1
-		  AND rc.max_person >= $2
-		GROUP BY rc.id, rc.name, rc.max_person, rc.base_price
-		HAVING COUNT(r.id) > 0
+			COUNT(r.id) AS available_count` + roomCategorySearchBaseQuery + `
 		ORDER BY rc.base_price ASC, rc.name ASC
-		LIMIT $5`,
+		LIMIT $5 OFFSET $6`
+
+	rows, err := r.db.Query(
+		dataQuery,
 		params.HotelID,
 		params.Guests,
 		params.CheckIn,
 		params.CheckOut,
 		params.Limit,
+		offset,
 	)
 	if err != nil {
-		return nil, err
+		return models.RoomCategorySearchPage{}, err
 	}
 	defer rows.Close()
 
-	var results []models.RoomCategorySearchResult
+	var categories []models.RoomCategorySearchResult
 	for rows.Next() {
 		var result models.RoomCategorySearchResult
 		if err := rows.Scan(
@@ -75,14 +95,33 @@ func (r *roomCategoryRepository) Search(params RoomCategorySearchParams) ([]mode
 			&result.BasePrice,
 			&result.AvailableCount,
 		); err != nil {
-			return nil, err
+			return models.RoomCategorySearchPage{}, err
 		}
-		results = append(results, result)
+		categories = append(categories, result)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return models.RoomCategorySearchPage{}, err
 	}
 
-	return results, nil
+	if categories == nil {
+		categories = []models.RoomCategorySearchResult{}
+	}
+
+	return models.RoomCategorySearchPage{
+		Categories: categories,
+		Pagination: models.Pagination{
+			Page:       params.Page,
+			Limit:      params.Limit,
+			Total:      total,
+			TotalPages: totalPages(total, params.Limit),
+		},
+	}, nil
+}
+
+func totalPages(total, limit int) int {
+	if total == 0 {
+		return 0
+	}
+	return (total + limit - 1) / limit
 }

@@ -18,6 +18,7 @@ var (
 	ErrInvalidCheckOut  = errors.New("check_out must be a valid date in YYYY-MM-DD format")
 	ErrInvalidDateRange = errors.New("check_out must be after check_in")
 	ErrInvalidLimit     = errors.New("limit must be between 1 and 10")
+	ErrInvalidPage      = errors.New("page must be a positive integer")
 )
 
 type RoomCategorySearchInput struct {
@@ -25,6 +26,7 @@ type RoomCategorySearchInput struct {
 	Guests   int
 	CheckIn  string
 	CheckOut string
+	Page     int
 	Limit    int
 }
 
@@ -36,10 +38,10 @@ func NewRoomCategoryService(repo repository.RoomCategoryRepository) *RoomCategor
 	return &RoomCategoryService{repo: repo}
 }
 
-func (s *RoomCategoryService) SearchCategories(input RoomCategorySearchInput) ([]models.RoomCategorySearchResult, error) {
+func (s *RoomCategoryService) SearchCategories(input RoomCategorySearchInput) (models.RoomCategorySearchPage, error) {
 	params, err := parseSearchInput(input)
 	if err != nil {
-		return nil, err
+		return models.RoomCategorySearchPage{}, err
 	}
 
 	return s.repo.Search(params)
@@ -67,6 +69,14 @@ func parseSearchInput(input RoomCategorySearchInput) (repository.RoomCategorySea
 		return repository.RoomCategorySearchParams{}, ErrInvalidDateRange
 	}
 
+	page := input.Page
+	if page == 0 {
+		page = 1
+	}
+	if page < 1 {
+		return repository.RoomCategorySearchParams{}, ErrInvalidPage
+	}
+
 	limit := input.Limit
 	if limit == 0 {
 		limit = maxCategorySearchLimit
@@ -80,6 +90,7 @@ func parseSearchInput(input RoomCategorySearchInput) (repository.RoomCategorySea
 		Guests:   input.Guests,
 		CheckIn:  checkIn,
 		CheckOut: checkOut,
+		Page:     page,
 		Limit:    limit,
 	}, nil
 }
@@ -98,6 +109,8 @@ func ValidationErrorMessage(err error) string {
 		return "check_out must be after check_in"
 	case errors.Is(err, ErrInvalidLimit):
 		return fmt.Sprintf("limit must be between 1 and %d", maxCategorySearchLimit)
+	case errors.Is(err, ErrInvalidPage):
+		return "page must be a positive integer"
 	default:
 		return "invalid request"
 	}

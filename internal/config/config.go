@@ -9,6 +9,7 @@ import (
 type Config struct {
 	Port        string
 	DatabaseURL string
+	RedisURL    string
 }
 
 func Load() Config {
@@ -24,8 +25,14 @@ func Load() Config {
 		databaseURL = "postgres://postgres:postgres@localhost:5432/hotel_booking?sslmode=disable"
 	}
 
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379/0"
+	}
+
 	return Config{
 		Port:        port,
 		DatabaseURL: databaseURL,
+		RedisURL:    redisURL,
 	}
 }
