@@ -157,9 +157,6 @@ func TestRoomAvailabilityRoute(t *testing.T) {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
 	}
 
-	if cc := response.Header().Get("Cache-Control"); cc != "no-store" {
-		t.Fatalf("expected Cache-Control no-store, got %q", cc)
-	}
 }
 
 func TestRoomAvailabilityRouteNotFound(t *testing.T) {

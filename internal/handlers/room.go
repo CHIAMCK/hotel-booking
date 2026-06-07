@@ -47,6 +47,5 @@ func (h *RoomHandler) Availability(c *gin.Context) {
 		return
 	}
 
-	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, result)
 }
