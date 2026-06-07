@@ -159,7 +159,7 @@ func TestRoomAvailabilityRoute(t *testing.T) {
 
 }
 
-func TestRoomAvailabilityRouteNotFound(t *testing.T) {
+func TestRoomAvailabilityRouteUnknownRoom(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	router := setupTestRouter()
@@ -171,8 +171,8 @@ func TestRoomAvailabilityRouteNotFound(t *testing.T) {
 
 	router.ServeHTTP(response, request)
 
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("expected status %d, got %d", http.StatusNotFound, response.Code)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
 	}
 }
 

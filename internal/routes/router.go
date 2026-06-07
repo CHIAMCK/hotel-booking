@@ -19,9 +19,8 @@ type Dependencies struct {
 }
 
 func SetupRouter(deps Dependencies) *gin.Engine {
-	roomService := service.NewRoomService(deps.RoomRepo)
 	bookingService := service.NewBookingService(deps.BookingRepo, deps.Lock, deps.BookingIdempotency)
-	roomHandler := handlers.NewRoomHandler(roomService, bookingService)
+	roomHandler := handlers.NewRoomHandler(bookingService)
 
 	roomCategoryService := service.NewRoomCategoryService(deps.RoomCategoryRepo)
 	roomCategoryHandler := handlers.NewRoomCategoryHandler(roomCategoryService)
