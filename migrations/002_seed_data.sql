@@ -31,7 +31,7 @@ INSERT INTO rooms (id, hotel_id, category_id, number, status) VALUES
 SELECT setval('rooms_id_seq', (SELECT MAX(id) FROM rooms));
 
 INSERT INTO customers (id, name, email, phone) VALUES
-    (1, 'Jane Doe', 'jane.doe@example.com', '+1-555-0100');
+    (1, 'Jane Doe', 'jane.doe@example.com', '+6011-5550100');
 
 SELECT setval('customers_id_seq', (SELECT MAX(id) FROM customers));
 

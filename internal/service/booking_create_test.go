@@ -32,8 +32,12 @@ func (s *createBookingRepoStub) Create(repository.CreateBookingParams) (models.B
 	return s.booking, nil
 }
 
-func (s *createBookingRepoStub) ListBlockingByRoomOverlap(int, time.Time, time.Time) ([]models.Booking, error) {
+func (s *createBookingRepoStub) ListActiveBookingsOverlappingRange(int, time.Time, time.Time) ([]models.Booking, error) {
 	return nil, nil
+}
+
+func (s *createBookingRepoStub) List(repository.ListBookingsParams) (models.BookingListPage, error) {
+	return models.BookingListPage{}, nil
 }
 
 type createIdempotencyStub struct {
@@ -59,67 +63,28 @@ type createLockStub struct {
 	acquired bool
 }
 
-func (s *createLockStub) TryLock(context.Context, string, time.Duration) (func(), bool, error) {
+func (s *createLockStub) TryLock(context.Context, string, time.Duration) (bool, error) {
 	if !s.acquired {
-		return func() {}, false, nil
+		return false, nil
 	}
-	return func() {}, true, nil
+	return true, nil
 }
 
-func TestParseCreateBookingInputValid(t *testing.T) {
-	params, key, err := parseCreateBookingInput(CreateBookingInput{
-		RoomID:     2,
-		CustomerID: 1,
-		CheckIn:    "2026-07-01",
-		CheckOut:   "2026-07-06",
-	})
-	if err != nil {
-		t.Fatalf("parseCreateBookingInput: %v", err)
-	}
-	if params.RoomID != 2 || params.CustomerID != 1 {
-		t.Fatalf("unexpected params: %+v", params)
-	}
-	if !params.CheckOut.After(params.CheckIn) {
-		t.Fatal("expected check-out after check-in")
-	}
-	if key != "booking:auto:2:1:2026-07-01:2026-07-06" {
-		t.Fatalf("unexpected idempotency key: %q", key)
-	}
+func (s *createLockStub) Unlock(context.Context, string) error {
+	return nil
 }
 
-func TestParseCreateBookingInputRejectsInvalidCustomerID(t *testing.T) {
-	_, _, err := parseCreateBookingInput(CreateBookingInput{
-		RoomID:     2,
-		CustomerID: 0,
-		CheckIn:    "2026-07-01",
-		CheckOut:   "2026-07-06",
-	})
-	if err != ErrInvalidCustomerID {
-		t.Fatalf("expected ErrInvalidCustomerID, got %v", err)
-	}
-}
-
-func TestParseCreateBookingInputRejectsSameDayStay(t *testing.T) {
-	_, _, err := parseCreateBookingInput(CreateBookingInput{
-		RoomID:     2,
-		CustomerID: 1,
-		CheckIn:    "2026-07-01",
-		CheckOut:   "2026-07-01",
-	})
-	if err != ErrInvalidDateRange {
-		t.Fatalf("expected ErrInvalidDateRange, got %v", err)
-	}
-}
-
-func TestParseCreateBookingInputRejectsInvalidCheckOut(t *testing.T) {
-	_, _, err := parseCreateBookingInput(CreateBookingInput{
-		RoomID:     2,
-		CustomerID: 1,
-		CheckIn:    "2026-07-01",
-		CheckOut:   "07-06-2026",
-	})
-	if err != ErrInvalidCheckOut {
-		t.Fatalf("expected ErrInvalidCheckOut, got %v", err)
+func testCreateBookingParams() repository.CreateBookingParams {
+	checkIn := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	checkOut := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
+	return repository.CreateBookingParams{
+		RoomID:        2,
+		CustomerID:    1,
+		CheckIn:       checkIn,
+		CheckOut:      checkOut,
+		Nights:        5,
+		TotalAmount:   750,
+		PricePerNight: 150,
 	}
 }
 
@@ -133,48 +98,25 @@ func TestBookingErrorMessageAndClassifiers(t *testing.T) {
 	cases := []struct {
 		err      error
 		msg      string
-		validate bool
 		conflict bool
-		notFound bool
 		cache    bool
 	}{
-		{ErrInvalidRoomID, "room_id must be a positive integer", true, false, false, false},
-		{repository.ErrRoomNotFound, "room not found", false, false, true, false},
-		{repository.ErrRoomNotAvailable, "room is not available", false, true, false, false},
-		{repository.ErrBookingOverlap, "room is already booked for the selected dates", false, true, false, false},
-		{ErrBookingLockNotAcquired, "another booking is in progress for this room, please retry", false, true, false, false},
-		{ErrDuplicateBookingRequest, "this booking request was already processed", false, true, false, false},
-		{ErrIdempotencyCache, "idempotency cache unavailable", false, false, false, true},
+		{repository.ErrBookingOverlap, "room is already booked for the selected dates", true, false},
+		{ErrBookingLockNotAcquired, "another booking is in progress for this room, please retry", true, false},
+		{ErrDuplicateBookingRequest, "this booking request was already processed", true, false},
+		{ErrIdempotencyCache, "idempotency cache unavailable", false, true},
 	}
 
 	for _, tc := range cases {
 		if got := BookingErrorMessage(tc.err); got != tc.msg {
 			t.Errorf("%v: message got %q want %q", tc.err, got, tc.msg)
 		}
-		if IsBookingValidationError(tc.err) != tc.validate {
-			t.Errorf("%v: validate got %v want %v", tc.err, IsBookingValidationError(tc.err), tc.validate)
-		}
 		if IsBookingConflictError(tc.err) != tc.conflict {
 			t.Errorf("%v: conflict got %v want %v", tc.err, IsBookingConflictError(tc.err), tc.conflict)
-		}
-		if IsBookingNotFoundError(tc.err) != tc.notFound {
-			t.Errorf("%v: notFound got %v want %v", tc.err, IsBookingNotFoundError(tc.err), tc.notFound)
 		}
 		if IsIdempotencyCacheError(tc.err) != tc.cache {
 			t.Errorf("%v: cache got %v want %v", tc.err, IsIdempotencyCacheError(tc.err), tc.cache)
 		}
-	}
-}
-
-func TestAvailabilityErrorMessageAndClassifiers(t *testing.T) {
-	if got := AvailabilityErrorMessage(ErrInvalidAvailabilityRange); got != "to must be on or after from" {
-		t.Fatalf("got %q", got)
-	}
-	if !IsAvailabilityValidationError(ErrAvailabilityWindowTooLarge) {
-		t.Fatal("expected availability validation error")
-	}
-	if IsAvailabilityValidationError(repository.ErrRoomNotFound) {
-		t.Fatal("room not found is not an availability validation error")
 	}
 }
 
@@ -183,12 +125,7 @@ func TestCreateRejectsDuplicateIdempotencyKey(t *testing.T) {
 	idem := &createIdempotencyStub{used: true}
 	svc := NewBookingService(repo, &createLockStub{acquired: true}, idem)
 
-	_, err := svc.Create(context.Background(), CreateBookingInput{
-		RoomID:     2,
-		CustomerID: 1,
-		CheckIn:    "2026-07-01",
-		CheckOut:   "2026-07-06",
-	})
+	_, err := svc.Create(context.Background(), testCreateBookingParams())
 	if err != ErrDuplicateBookingRequest {
 		t.Fatalf("expected duplicate booking error, got %v", err)
 	}
@@ -198,33 +135,15 @@ func TestCreateRejectsDuplicateIdempotencyKey(t *testing.T) {
 }
 
 func TestCreatePropagatesRepoErrors(t *testing.T) {
-	cases := []struct {
-		name string
-		err  error
-	}{
-		{"room not found", repository.ErrRoomNotFound},
-		{"room not available", repository.ErrRoomNotAvailable},
-		{"overlap", repository.ErrBookingOverlap},
+	repo := &createBookingRepoStub{err: repository.ErrBookingOverlap}
+	svc := NewBookingService(repo, &createLockStub{acquired: true}, &createIdempotencyStub{})
+
+	_, err := svc.Create(context.Background(), testCreateBookingParams())
+	if !errors.Is(err, repository.ErrBookingOverlap) {
+		t.Fatalf("expected %v, got %v", repository.ErrBookingOverlap, err)
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			repo := &createBookingRepoStub{err: tc.err}
-			svc := NewBookingService(repo, &createLockStub{acquired: true}, &createIdempotencyStub{})
-
-			_, err := svc.Create(context.Background(), CreateBookingInput{
-				RoomID:     2,
-				CustomerID: 1,
-				CheckIn:    "2026-07-01",
-				CheckOut:   "2026-07-06",
-			})
-			if !errors.Is(err, tc.err) {
-				t.Fatalf("expected %v, got %v", tc.err, err)
-			}
-			if repo.calls != 1 {
-				t.Fatalf("expected one repo call, got %d", repo.calls)
-			}
-		})
+	if repo.calls != 1 {
+		t.Fatalf("expected 1 create call, got %d", repo.calls)
 	}
 }
 
@@ -233,12 +152,7 @@ func TestCreateCachesBookingAfterInsert(t *testing.T) {
 	idem := &createIdempotencyStub{}
 	svc := NewBookingService(repo, &createLockStub{acquired: true}, idem)
 
-	_, err := svc.Create(context.Background(), CreateBookingInput{
-		RoomID:     2,
-		CustomerID: 1,
-		CheckIn:    "2026-07-01",
-		CheckOut:   "2026-07-06",
-	})
+	_, err := svc.Create(context.Background(), testCreateBookingParams())
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

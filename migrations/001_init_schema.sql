@@ -56,7 +56,6 @@ CREATE TABLE bookings (
     customer_id INT NOT NULL REFERENCES customers(id),
     total_amount NUMERIC(10, 2) NOT NULL CHECK (total_amount >= 0),
     price_per_night NUMERIC(10, 2) NOT NULL CHECK (price_per_night >= 0),
-    idempotency_key VARCHAR(255),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CHECK (end_time > start_time)

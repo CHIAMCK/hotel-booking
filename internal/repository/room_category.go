@@ -48,18 +48,6 @@ const roomCategorySearchBaseQuery = `
 	HAVING COUNT(r.id) > 0`
 
 func (r *roomCategoryRepository) Search(params RoomCategorySearchParams) (models.RoomCategorySearchPage, error) {
-	var total int
-	countQuery := `SELECT COUNT(*) FROM (SELECT rc.id ` + roomCategorySearchBaseQuery + `) AS matching_categories`
-	if err := r.db.QueryRow(
-		countQuery,
-		params.HotelID,
-		params.Guests,
-		params.CheckIn,
-		params.CheckOut,
-	).Scan(&total); err != nil {
-		return models.RoomCategorySearchPage{}, err
-	}
-
 	offset := (params.Page - 1) * params.Limit
 	dataQuery := `
 		SELECT
@@ -80,9 +68,11 @@ func (r *roomCategoryRepository) Search(params RoomCategorySearchParams) (models
 		params.Limit,
 		offset,
 	)
+
 	if err != nil {
 		return models.RoomCategorySearchPage{}, err
 	}
+
 	defer rows.Close()
 
 	var categories []models.RoomCategorySearchResult
@@ -97,6 +87,7 @@ func (r *roomCategoryRepository) Search(params RoomCategorySearchParams) (models
 		); err != nil {
 			return models.RoomCategorySearchPage{}, err
 		}
+
 		categories = append(categories, result)
 	}
 
@@ -111,17 +102,8 @@ func (r *roomCategoryRepository) Search(params RoomCategorySearchParams) (models
 	return models.RoomCategorySearchPage{
 		Categories: categories,
 		Pagination: models.Pagination{
-			Page:       params.Page,
-			Limit:      params.Limit,
-			Total:      total,
-			TotalPages: totalPages(total, params.Limit),
+			Page:  params.Page,
+			Limit: params.Limit,
 		},
 	}, nil
-}
-
-func totalPages(total, limit int) int {
-	if total == 0 {
-		return 0
-	}
-	return (total + limit - 1) / limit
 }

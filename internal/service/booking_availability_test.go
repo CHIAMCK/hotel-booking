@@ -19,18 +19,30 @@ func (s *availabilityRepoStub) Create(repository.CreateBookingParams) (models.Bo
 	return models.Booking{}, errors.New("not implemented")
 }
 
-func (s *availabilityRepoStub) ListBlockingByRoomOverlap(int, time.Time, time.Time) ([]models.Booking, error) {
+func (s *availabilityRepoStub) ListActiveBookingsOverlappingRange(int, time.Time, time.Time) ([]models.Booking, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
 	return s.bookings, nil
 }
 
-func TestOccupiedNightsUTCHalfOpenRange(t *testing.T) {
+func (s *availabilityRepoStub) List(repository.ListBookingsParams) (models.BookingListPage, error) {
+	return models.BookingListPage{}, nil
+}
+
+func mustDate(s string) time.Time {
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
+
+func TestStayNightDatesHalfOpenRange(t *testing.T) {
 	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
 
-	got := occupiedNightsUTC(start, end)
+	got := stayNightDates(start, end)
 	want := []string{"2026-07-01", "2026-07-02", "2026-07-03", "2026-07-04", "2026-07-05"}
 
 	if len(got) != len(want) {
@@ -43,19 +55,19 @@ func TestOccupiedNightsUTCHalfOpenRange(t *testing.T) {
 	}
 }
 
-func TestOccupiedNightsUTCSingleNight(t *testing.T) {
+func TestStayNightDatesSingleNight(t *testing.T) {
 	start := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
 
-	got := occupiedNightsUTC(start, end)
+	got := stayNightDates(start, end)
 	if len(got) != 1 || got[0] != "2026-08-10" {
 		t.Fatalf("got %v, want [2026-08-10]", got)
 	}
 }
 
-func TestOccupiedNightsUTCEmptyWhenCheckOutOnCheckIn(t *testing.T) {
+func TestStayNightDatesEmptyWhenCheckOutOnCheckIn(t *testing.T) {
 	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	got := occupiedNightsUTC(day, day)
+	got := stayNightDates(day, day)
 	if len(got) != 0 {
 		t.Fatalf("expected no nights, got %v", got)
 	}
@@ -64,7 +76,7 @@ func TestOccupiedNightsUTCEmptyWhenCheckOutOnCheckIn(t *testing.T) {
 func TestGetRoomAvailabilityEmpty(t *testing.T) {
 	svc := NewBookingService(&availabilityRepoStub{}, nil, nil)
 
-	res, err := svc.GetRoomAvailability(context.Background(), 2, "2026-07-01", "2026-07-10")
+	res, err := svc.GetRoomAvailability(context.Background(), 2, mustDate("2026-07-01"), mustDate("2026-07-10"))
 	if err != nil {
 		t.Fatalf("GetRoomAvailability: %v", err)
 	}
@@ -85,7 +97,7 @@ func TestGetRoomAvailabilityClipsToWindow(t *testing.T) {
 		},
 	}, nil, nil)
 
-	res, err := svc.GetRoomAvailability(context.Background(), 2, "2026-07-01", "2026-07-03")
+	res, err := svc.GetRoomAvailability(context.Background(), 2, mustDate("2026-07-01"), mustDate("2026-07-03"))
 	if err != nil {
 		t.Fatalf("GetRoomAvailability: %v", err)
 	}
@@ -97,42 +109,6 @@ func TestGetRoomAvailabilityClipsToWindow(t *testing.T) {
 		if res.UnavailableDates[i] != d {
 			t.Fatalf("index %d: got %q want %q", i, res.UnavailableDates[i], d)
 		}
-	}
-}
-
-func TestGetRoomAvailabilityInvalidRoomID(t *testing.T) {
-	svc := NewBookingService(&availabilityRepoStub{}, nil, nil)
-
-	_, err := svc.GetRoomAvailability(context.Background(), 0, "2026-07-01", "2026-07-10")
-	if err != ErrInvalidRoomID {
-		t.Fatalf("expected ErrInvalidRoomID, got %v", err)
-	}
-}
-
-func TestGetRoomAvailabilityInvalidFromDate(t *testing.T) {
-	svc := NewBookingService(&availabilityRepoStub{}, nil, nil)
-
-	_, err := svc.GetRoomAvailability(context.Background(), 2, "not-a-date", "2026-07-10")
-	if err != ErrInvalidAvailabilityFrom {
-		t.Fatalf("expected ErrInvalidAvailabilityFrom, got %v", err)
-	}
-}
-
-func TestGetRoomAvailabilityInvalidToDate(t *testing.T) {
-	svc := NewBookingService(&availabilityRepoStub{}, nil, nil)
-
-	_, err := svc.GetRoomAvailability(context.Background(), 2, "2026-07-01", "bad")
-	if err != ErrInvalidAvailabilityTo {
-		t.Fatalf("expected ErrInvalidAvailabilityTo, got %v", err)
-	}
-}
-
-func TestGetRoomAvailabilityWindowTooLarge(t *testing.T) {
-	svc := NewBookingService(&availabilityRepoStub{}, nil, nil)
-
-	_, err := svc.GetRoomAvailability(context.Background(), 2, "2026-01-01", "2028-01-02")
-	if err != ErrAvailabilityWindowTooLarge {
-		t.Fatalf("expected ErrAvailabilityWindowTooLarge, got %v", err)
 	}
 }
 
@@ -154,7 +130,7 @@ func TestGetRoomAvailabilityMergesMultipleBookings(t *testing.T) {
 		},
 	}, nil, nil)
 
-	res, err := svc.GetRoomAvailability(context.Background(), 2, "2026-07-01", "2026-07-10")
+	res, err := svc.GetRoomAvailability(context.Background(), 2, mustDate("2026-07-01"), mustDate("2026-07-10"))
 	if err != nil {
 		t.Fatalf("GetRoomAvailability: %v", err)
 	}
@@ -172,19 +148,9 @@ func TestGetRoomAvailabilityMergesMultipleBookings(t *testing.T) {
 func TestGetRoomAvailabilityPropagatesRepoError(t *testing.T) {
 	svc := NewBookingService(&availabilityRepoStub{err: errors.New("db down")}, nil, nil)
 
-	_, err := svc.GetRoomAvailability(context.Background(), 2, "2026-07-01", "2026-07-10")
+	_, err := svc.GetRoomAvailability(context.Background(), 2, mustDate("2026-07-01"), mustDate("2026-07-10"))
 	if err == nil {
 		t.Fatal("expected repo error")
-	}
-}
-
-func TestParseAvailabilityWindowExplicitRange(t *testing.T) {
-	from, to, err := parseAvailabilityWindow("2026-07-01", "2026-07-10")
-	if err != nil {
-		t.Fatalf("parseAvailabilityWindow: %v", err)
-	}
-	if from.Format("2006-01-02") != "2026-07-01" || to.Format("2006-01-02") != "2026-07-10" {
-		t.Fatalf("unexpected window: %s to %s", from, to)
 	}
 }
 

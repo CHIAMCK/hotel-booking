@@ -121,10 +121,6 @@ func TestRoomCategoryRepositorySearch(t *testing.T) {
 		t.Fatalf("search categories: %v", err)
 	}
 
-	if result.Pagination.Total != 3 {
-		t.Fatalf("expected total 3, got %d", result.Pagination.Total)
-	}
-
 	if len(result.Categories) != 3 {
 		t.Fatalf("expected 3 categories, got %d", len(result.Categories))
 	}
@@ -162,12 +158,6 @@ func TestRoomCategoryRepositorySearchPagination(t *testing.T) {
 		t.Fatalf("search page 1: %v", err)
 	}
 
-	if page1.Pagination.Total != 12 {
-		t.Fatalf("expected total 12, got %d", page1.Pagination.Total)
-	}
-	if page1.Pagination.TotalPages != 2 {
-		t.Fatalf("expected 2 total pages, got %d", page1.Pagination.TotalPages)
-	}
 	if len(page1.Categories) != 10 {
 		t.Fatalf("expected 10 categories on page 1, got %d", len(page1.Categories))
 	}
@@ -209,9 +199,6 @@ func TestRoomCategoryRepositorySearchExcludesGuestMismatch(t *testing.T) {
 		t.Fatalf("search categories: %v", err)
 	}
 
-	if result.Pagination.Total != 0 {
-		t.Fatalf("expected total 0 for 5 guests, got %d", result.Pagination.Total)
-	}
 	if len(result.Categories) != 0 {
 		t.Fatalf("expected no categories for 5 guests, got %d", len(result.Categories))
 	}

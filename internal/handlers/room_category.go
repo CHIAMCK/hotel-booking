@@ -1,9 +1,7 @@
 package handlers
 
 import (
-	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/chiamck/hotel-booking/internal/service"
 
@@ -34,61 +32,14 @@ func (h *RoomCategoryHandler) Search(c *gin.Context) {
 		return
 	}
 
-	hotelID, err := strconv.Atoi(query.HotelID)
+	params, err := parseRoomCategorySearchQuery(query)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "hotel_id must be a positive integer"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	guests, err := strconv.Atoi(query.Guests)
+	result, err := h.service.SearchCategories(params)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "guests must be a positive integer"})
-		return
-	}
-
-	page := 1
-	if query.Page != "" {
-		page, err = strconv.Atoi(query.Page)
-		if err != nil || page < 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "page must be a positive integer"})
-			return
-		}
-	}
-
-	limit := 10
-	if query.Limit != "" {
-		limit, err = strconv.Atoi(query.Limit)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be between 1 and 10"})
-			return
-		}
-	}
-
-	result, err := h.service.SearchCategories(service.RoomCategorySearchInput{
-		HotelID:  hotelID,
-		Guests:   guests,
-		CheckIn:  query.CheckIn,
-		CheckOut: query.CheckOut,
-		Page:     page,
-		Limit:    limit,
-	})
-	if err != nil {
-		var validationErr error
-		switch {
-		case errors.Is(err, service.ErrInvalidHotelID),
-			errors.Is(err, service.ErrInvalidGuests),
-			errors.Is(err, service.ErrInvalidCheckIn),
-			errors.Is(err, service.ErrInvalidCheckOut),
-			errors.Is(err, service.ErrInvalidDateRange),
-			errors.Is(err, service.ErrInvalidLimit),
-			errors.Is(err, service.ErrInvalidPage):
-			validationErr = err
-		}
-		if validationErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": service.ValidationErrorMessage(err)})
-			return
-		}
-
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to search room categories"})
 		return
 	}

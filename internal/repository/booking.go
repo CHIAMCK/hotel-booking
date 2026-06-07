@@ -6,26 +6,34 @@ import (
 	"time"
 
 	"github.com/chiamck/hotel-booking/internal/models"
+	"github.com/lib/pq"
 )
 
 var (
-	ErrBookingNotFound  = errors.New("booking not found")
-	ErrRoomNotFound     = errors.New("room not found")
-	ErrRoomNotAvailable = errors.New("room is not available")
-	ErrBookingOverlap   = errors.New("room is already booked for the selected dates")
+	ErrBookingNotFound = errors.New("booking not found")
+	ErrBookingOverlap  = errors.New("room is already booked for the selected dates")
 )
 
 type CreateBookingParams struct {
-	RoomID     int
+	RoomID        int
+	CustomerID    int
+	CheckIn       time.Time
+	CheckOut      time.Time
+	Nights        int
+	TotalAmount   float64
+	PricePerNight float64
+}
+
+type ListBookingsParams struct {
 	CustomerID int
-	CheckIn    time.Time
-	CheckOut   time.Time
+	Page       int
+	Limit      int
 }
 
 type BookingRepository interface {
 	Create(params CreateBookingParams) (models.Booking, error)
-	// ListBlockingByRoomOverlap returns pending/confirmed bookings that overlap [rangeStart, rangeEnd) in time.
-	ListBlockingByRoomOverlap(roomID int, rangeStart, rangeEnd time.Time) ([]models.Booking, error)
+	ListActiveBookingsOverlappingRange(roomID int, rangeStart, rangeEnd time.Time) ([]models.Booking, error)
+	List(params ListBookingsParams) (models.BookingListPage, error)
 }
 
 type bookingRepository struct {
@@ -37,64 +45,35 @@ func NewBookingRepository(db *sql.DB) BookingRepository {
 }
 
 func (r *bookingRepository) Create(params CreateBookingParams) (models.Booking, error) {
-	tx, err := r.db.Begin()
-	if err != nil {
-		return models.Booking{}, err
-	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-
-	var roomStatus string
-	var basePrice float64
-	err = tx.QueryRow(`
-		SELECT r.status, rc.base_price
-		FROM rooms r
-		JOIN room_categories rc ON rc.id = r.category_id
-		WHERE r.id = $1
-		FOR UPDATE`, params.RoomID).Scan(&roomStatus, &basePrice)
-	if errors.Is(err, sql.ErrNoRows) {
-		return models.Booking{}, ErrRoomNotFound
-	}
-	if err != nil {
-		return models.Booking{}, err
-	}
-	if roomStatus != "available" {
-		return models.Booking{}, ErrRoomNotAvailable
-	}
-
-	nights := int(params.CheckOut.Sub(params.CheckIn).Hours() / 24)
-	if nights < 1 {
-		return models.Booking{}, ErrBookingOverlap
-	}
-
-	totalAmount := basePrice * float64(nights)
-
-	row := tx.QueryRow(`
+	row := r.db.QueryRow(`
 		INSERT INTO bookings (
 			room_id, customer_id, start_time, end_time, status,
 			total_amount, price_per_night
 		) VALUES ($1, $2, $3, $4, 'confirmed', $5, $6)
 		RETURNING id, room_id, customer_id, start_time, end_time, status,
-		          total_amount, price_per_night, COALESCE(idempotency_key, '')`,
+		          total_amount, price_per_night`,
 		params.RoomID,
 		params.CustomerID,
 		params.CheckIn,
 		params.CheckOut,
-		totalAmount,
-		basePrice,
+		params.TotalAmount,
+		params.PricePerNight,
 	)
 
 	booking, err := scanBooking(row)
 	if err != nil {
-		return models.Booking{}, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return models.Booking{}, err
+		return models.Booking{}, mapBookingCreateError(err)
 	}
 
 	return booking, nil
+}
+
+func mapBookingCreateError(err error) error {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && pqErr.Code == "23P01" && pqErr.Constraint == "bookings_no_overlap" {
+		return ErrBookingOverlap
+	}
+	return err
 }
 
 type bookingScanner interface {
@@ -112,19 +91,18 @@ func scanBooking(row bookingScanner) (models.Booking, error) {
 		&booking.Status,
 		&booking.TotalAmount,
 		&booking.PricePerNight,
-		&booking.IdempotencyKey,
 	)
 	return booking, err
 }
 
-func (r *bookingRepository) ListBlockingByRoomOverlap(roomID int, rangeStart, rangeEnd time.Time) ([]models.Booking, error) {
+func (r *bookingRepository) ListActiveBookingsOverlappingRange(roomID int, rangeStart, rangeEnd time.Time) ([]models.Booking, error) {
 	if !rangeEnd.After(rangeStart) {
 		return nil, nil
 	}
 
 	rows, err := r.db.Query(`
 		SELECT id, room_id, customer_id, start_time, end_time, status,
-		       total_amount, price_per_night, COALESCE(idempotency_key, '')
+		       total_amount, price_per_night
 		FROM bookings
 		WHERE room_id = $1
 		  AND status IN ('pending', 'confirmed')
@@ -149,4 +127,49 @@ func (r *bookingRepository) ListBlockingByRoomOverlap(roomID int, rangeStart, ra
 		return nil, err
 	}
 	return list, nil
+}
+
+func (r *bookingRepository) List(params ListBookingsParams) (models.BookingListPage, error) {
+	offset := (params.Page - 1) * params.Limit
+	rows, err := r.db.Query(`
+		SELECT id, room_id, customer_id, start_time, end_time, status,
+		       total_amount, price_per_night
+		FROM bookings
+		WHERE customer_id = $1
+		ORDER BY start_time DESC, id DESC
+		LIMIT $2 OFFSET $3`,
+		params.CustomerID, params.Limit, offset,
+	)
+
+	if err != nil {
+		return models.BookingListPage{}, err
+	}
+
+	defer rows.Close()
+
+	var bookings []models.Booking
+	for rows.Next() {
+		booking, err := scanBooking(rows)
+		if err != nil {
+			return models.BookingListPage{}, err
+		}
+
+		bookings = append(bookings, booking)
+	}
+
+	if err := rows.Err(); err != nil {
+		return models.BookingListPage{}, err
+	}
+
+	if bookings == nil {
+		bookings = []models.Booking{}
+	}
+
+	return models.BookingListPage{
+		Bookings: bookings,
+		Pagination: models.Pagination{
+			Page:  params.Page,
+			Limit: params.Limit,
+		},
+	}, nil
 }

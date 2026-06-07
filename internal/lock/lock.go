@@ -6,5 +6,6 @@ import (
 )
 
 type DistributedLock interface {
-	TryLock(ctx context.Context, key string, exp time.Duration) (unlock func(), acquired bool, err error)
+	TryLock(ctx context.Context, key string, exp time.Duration) (acquired bool, err error)
+	Unlock(ctx context.Context, key string) error
 }

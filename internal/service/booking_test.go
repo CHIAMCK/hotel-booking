@@ -36,8 +36,18 @@ func (s *stubBookingRepository) Create(params repository.CreateBookingParams) (m
 	}, nil
 }
 
-func (s *stubBookingRepository) ListBlockingByRoomOverlap(roomID int, rangeStart, rangeEnd time.Time) ([]models.Booking, error) {
+func (s *stubBookingRepository) ListActiveBookingsOverlappingRange(roomID int, rangeStart, rangeEnd time.Time) ([]models.Booking, error) {
 	return nil, nil
+}
+
+func (s *stubBookingRepository) List(params repository.ListBookingsParams) (models.BookingListPage, error) {
+	return models.BookingListPage{
+		Bookings: []models.Booking{},
+		Pagination: models.Pagination{
+			Page:  params.Page,
+			Limit: params.Limit,
+		},
+	}, nil
 }
 
 type availabilityStubRepo struct {
@@ -48,8 +58,12 @@ func (a *availabilityStubRepo) Create(params repository.CreateBookingParams) (mo
 	return models.Booking{}, errors.New("not implemented")
 }
 
-func (a *availabilityStubRepo) ListBlockingByRoomOverlap(roomID int, rangeStart, rangeEnd time.Time) ([]models.Booking, error) {
+func (a *availabilityStubRepo) ListActiveBookingsOverlappingRange(roomID int, rangeStart, rangeEnd time.Time) ([]models.Booking, error) {
 	return a.list, nil
+}
+
+func (a *availabilityStubRepo) List(repository.ListBookingsParams) (models.BookingListPage, error) {
+	return models.BookingListPage{}, errors.New("not implemented")
 }
 
 var _ repository.BookingRepository = (*availabilityStubRepo)(nil)
@@ -83,11 +97,29 @@ type stubLocker struct {
 	acquired bool
 }
 
-func (s *stubLocker) TryLock(ctx context.Context, key string, exp time.Duration) (func(), bool, error) {
+func (s *stubLocker) TryLock(ctx context.Context, key string, exp time.Duration) (bool, error) {
 	if !s.acquired {
-		return func() {}, false, nil
+		return false, nil
 	}
-	return func() {}, true, nil
+	return true, nil
+}
+
+func (s *stubLocker) Unlock(context.Context, string) error {
+	return nil
+}
+
+func testCreateBookingParams() repository.CreateBookingParams {
+	checkIn := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	checkOut := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
+	return repository.CreateBookingParams{
+		RoomID:        2,
+		CustomerID:    1,
+		CheckIn:       checkIn,
+		CheckOut:      checkOut,
+		Nights:        5,
+		TotalAmount:   750,
+		PricePerNight: 150,
+	}
 }
 
 func TestBookingServiceCreate(t *testing.T) {
@@ -95,12 +127,7 @@ func TestBookingServiceCreate(t *testing.T) {
 	idem := newMemoryIdempotencyStore()
 	svc := service.NewBookingService(repo, &stubLocker{acquired: true}, idem)
 
-	booking, err := svc.Create(context.Background(), service.CreateBookingInput{
-		RoomID:     2,
-		CustomerID: 1,
-		CheckIn:    "2026-07-01",
-		CheckOut:   "2026-07-06",
-	})
+	booking, err := svc.Create(context.Background(), testCreateBookingParams())
 	if err != nil {
 		t.Fatalf("create booking: %v", err)
 	}
@@ -108,12 +135,7 @@ func TestBookingServiceCreate(t *testing.T) {
 		t.Fatalf("expected created booking, got booking=%+v", booking)
 	}
 
-	_, err = svc.Create(context.Background(), service.CreateBookingInput{
-		RoomID:     2,
-		CustomerID: 1,
-		CheckIn:    "2026-07-01",
-		CheckOut:   "2026-07-06",
-	})
+	_, err = svc.Create(context.Background(), testCreateBookingParams())
 	if err != service.ErrDuplicateBookingRequest {
 		t.Fatalf("expected duplicate booking error, got %v", err)
 	}
@@ -122,12 +144,7 @@ func TestBookingServiceCreate(t *testing.T) {
 func TestBookingServiceCreateUsesDerivedIdempotencyKey(t *testing.T) {
 	svc := service.NewBookingService(newStubBookingRepository(), &stubLocker{acquired: true}, newMemoryIdempotencyStore())
 
-	_, err := svc.Create(context.Background(), service.CreateBookingInput{
-		RoomID:     2,
-		CustomerID: 1,
-		CheckIn:    "2026-07-01",
-		CheckOut:   "2026-07-06",
-	})
+	_, err := svc.Create(context.Background(), testCreateBookingParams())
 	if err != nil {
 		t.Fatalf("expected success with derived idempotency key, got %v", err)
 	}
@@ -136,12 +153,7 @@ func TestBookingServiceCreateUsesDerivedIdempotencyKey(t *testing.T) {
 func TestBookingServiceLockNotAcquired(t *testing.T) {
 	svc := service.NewBookingService(newStubBookingRepository(), &stubLocker{acquired: false}, newMemoryIdempotencyStore())
 
-	_, err := svc.Create(context.Background(), service.CreateBookingInput{
-		RoomID:     2,
-		CustomerID: 1,
-		CheckIn:    "2026-07-01",
-		CheckOut:   "2026-07-06",
-	})
+	_, err := svc.Create(context.Background(), testCreateBookingParams())
 	if err != service.ErrBookingLockNotAcquired {
 		t.Fatalf("expected ErrBookingLockNotAcquired, got %v", err)
 	}
@@ -157,7 +169,10 @@ func TestBookingServiceRoomAvailabilityNights(t *testing.T) {
 	}
 	svc := service.NewBookingService(repo, &stubLocker{acquired: true}, newMemoryIdempotencyStore())
 
-	res, err := svc.GetRoomAvailability(context.Background(), 2, "2026-07-01", "2026-07-31")
+	res, err := svc.GetRoomAvailability(context.Background(), 2,
+		time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC),
+	)
 	if err != nil {
 		t.Fatalf("GetRoomAvailability: %v", err)
 	}
@@ -172,42 +187,6 @@ func TestBookingServiceRoomAvailabilityNights(t *testing.T) {
 	}
 }
 
-func TestBookingServiceRoomAvailabilityRejectsInvalidRange(t *testing.T) {
-	svc := service.NewBookingService(&availabilityStubRepo{}, &stubLocker{acquired: true}, newMemoryIdempotencyStore())
-	_, err := svc.GetRoomAvailability(context.Background(), 2, "2026-08-10", "2026-08-01")
-	if err != service.ErrInvalidAvailabilityRange {
-		t.Fatalf("expected ErrInvalidAvailabilityRange, got %v", err)
-	}
-}
-
-func TestBookingServiceCreateRejectsInvalidRoomID(t *testing.T) {
-	svc := service.NewBookingService(newStubBookingRepository(), &stubLocker{acquired: true}, newMemoryIdempotencyStore())
-
-	_, err := svc.Create(context.Background(), service.CreateBookingInput{
-		RoomID:     0,
-		CustomerID: 1,
-		CheckIn:    "2026-07-01",
-		CheckOut:   "2026-07-06",
-	})
-	if err != service.ErrInvalidRoomID {
-		t.Fatalf("expected ErrInvalidRoomID, got %v", err)
-	}
-}
-
-func TestBookingServiceCreateRejectsInvalidDateRange(t *testing.T) {
-	svc := service.NewBookingService(newStubBookingRepository(), &stubLocker{acquired: true}, newMemoryIdempotencyStore())
-
-	_, err := svc.Create(context.Background(), service.CreateBookingInput{
-		RoomID:     2,
-		CustomerID: 1,
-		CheckIn:    "2026-07-06",
-		CheckOut:   "2026-07-01",
-	})
-	if err != service.ErrInvalidDateRange {
-		t.Fatalf("expected ErrInvalidDateRange, got %v", err)
-	}
-}
-
 type failingIdempotencyStore struct{}
 
 func (failingIdempotencyStore) CheckIdempotent(context.Context, string) (bool, error) {
@@ -218,15 +197,26 @@ func (failingIdempotencyStore) SetIdempotent(context.Context, string, time.Durat
 	return errors.New("redis down")
 }
 
+func TestBookingServiceList(t *testing.T) {
+	svc := service.NewBookingService(newStubBookingRepository(), &stubLocker{acquired: true}, newMemoryIdempotencyStore())
+
+	page, err := svc.List(context.Background(), repository.ListBookingsParams{
+		CustomerID: 1,
+		Page:       1,
+		Limit:      20,
+	})
+	if err != nil {
+		t.Fatalf("list bookings: %v", err)
+	}
+	if page.Pagination.Page != 1 || page.Pagination.Limit != 20 {
+		t.Fatalf("unexpected pagination: %+v", page.Pagination)
+	}
+}
+
 func TestBookingServiceCreateIdempotencyCacheError(t *testing.T) {
 	svc := service.NewBookingService(newStubBookingRepository(), &stubLocker{acquired: true}, failingIdempotencyStore{})
 
-	_, err := svc.Create(context.Background(), service.CreateBookingInput{
-		RoomID:     2,
-		CustomerID: 1,
-		CheckIn:    "2026-07-01",
-		CheckOut:   "2026-07-06",
-	})
+	_, err := svc.Create(context.Background(), testCreateBookingParams())
 	if !service.IsIdempotencyCacheError(err) {
 		t.Fatalf("expected idempotency cache error, got %v", err)
 	}

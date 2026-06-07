@@ -15,19 +15,15 @@ func NewRedisLock(client *redis.Client) *RedisLock {
 	return &RedisLock{client: client}
 }
 
-func (l *RedisLock) TryLock(ctx context.Context, key string, exp time.Duration) (func(), bool, error) {
-	// SET key NX with expiration so the lock is released if the holder crashes.
+func (l *RedisLock) TryLock(ctx context.Context, key string, exp time.Duration) (bool, error) {
 	acquired, err := l.client.SetNX(ctx, key, "1", exp).Result()
 	if err != nil {
-		return nil, false, err
-	}
-	if !acquired {
-		return nil, false, nil
+		return false, err
 	}
 
-	unlock := func() {
-		_ = l.client.Del(context.Background(), key).Err()
-	}
+	return acquired, nil
+}
 
-	return unlock, true, nil
+func (l *RedisLock) Unlock(ctx context.Context, key string) error {
+	return l.client.Del(ctx, key).Err()
 }

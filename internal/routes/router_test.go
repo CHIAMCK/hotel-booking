@@ -33,10 +33,8 @@ func (stubRoomCategoryRepository) Search(params repository.RoomCategorySearchPar
 			{ID: 2, Name: "Executive Room", MaxPerson: 3, BasePrice: 200, AvailableCount: 1},
 		},
 		Pagination: models.Pagination{
-			Page:       params.Page,
-			Limit:      params.Limit,
-			Total:      2,
-			TotalPages: 1,
+			Page:  params.Page,
+			Limit: params.Limit,
 		},
 	}, nil
 }
@@ -56,14 +54,39 @@ func (stubBookingRepository) Create(params repository.CreateBookingParams) (mode
 	}, nil
 }
 
-func (stubBookingRepository) ListBlockingByRoomOverlap(roomID int, rangeStart, rangeEnd time.Time) ([]models.Booking, error) {
+func (stubBookingRepository) ListActiveBookingsOverlappingRange(roomID int, rangeStart, rangeEnd time.Time) ([]models.Booking, error) {
 	return nil, nil
+}
+
+func (stubBookingRepository) List(params repository.ListBookingsParams) (models.BookingListPage, error) {
+	return models.BookingListPage{
+		Bookings: []models.Booking{
+			{
+				ID:            1,
+				RoomID:        2,
+				CustomerID:    1,
+				StartTime:     time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+				EndTime:       time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC),
+				Status:        "confirmed",
+				TotalAmount:   750,
+				PricePerNight: 150,
+			},
+		},
+		Pagination: models.Pagination{
+			Page:  params.Page,
+			Limit: params.Limit,
+		},
+	}, nil
 }
 
 type stubLocker struct{}
 
-func (stubLocker) TryLock(ctx context.Context, key string, exp time.Duration) (func(), bool, error) {
-	return func() {}, true, nil
+func (stubLocker) TryLock(ctx context.Context, key string, exp time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (stubLocker) Unlock(context.Context, string) error {
+	return nil
 }
 
 type memoryIdempotencyStore struct {
@@ -205,7 +228,7 @@ func TestRoomCategorySearchRoute(t *testing.T) {
 		t.Fatalf("unexpected executive availability: %+v", payload.Categories[1])
 	}
 
-	if payload.Pagination.Page != 1 || payload.Pagination.Limit != 10 || payload.Pagination.Total != 2 {
+	if payload.Pagination.Page != 1 || payload.Pagination.Limit != 10 {
 		t.Fatalf("unexpected pagination: %+v", payload.Pagination)
 	}
 }
@@ -252,6 +275,64 @@ func TestRoomCategorySearchRouteInvalidPage(t *testing.T) {
 	}
 }
 
+func TestListBookingsRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	router := setupTestRouter()
+	response := httptest.NewRecorder()
+	request, err := http.NewRequest(http.MethodGet, "/api/v1/bookings?user_id=1", nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+
+	var payload struct {
+		Bookings []struct {
+			ID     int    `json:"id"`
+			RoomID int    `json:"room_id"`
+			Status string `json:"status"`
+		} `json:"bookings"`
+		Pagination struct {
+			Page       int `json:"page"`
+			Limit      int `json:"limit"`
+			Total      int `json:"total"`
+			TotalPages int `json:"total_pages"`
+		} `json:"pagination"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if len(payload.Bookings) != 1 || payload.Bookings[0].ID != 1 {
+		t.Fatalf("unexpected bookings: %+v", payload.Bookings)
+	}
+	if payload.Pagination.Page != 1 || payload.Pagination.Limit != 20 {
+		t.Fatalf("unexpected pagination: %+v", payload.Pagination)
+	}
+}
+
+func TestListBookingsRouteInvalidPage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	router := setupTestRouter()
+	response := httptest.NewRecorder()
+	request, err := http.NewRequest(http.MethodGet, "/api/v1/bookings?user_id=1&page=0", nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.Code)
+	}
+}
+
 func TestCreateBookingRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -259,7 +340,8 @@ func TestCreateBookingRoute(t *testing.T) {
 		"room_id": 2,
 		"customer_id": 1,
 		"check_in": "2026-07-01",
-		"check_out": "2026-07-06"
+		"check_out": "2026-07-06",
+		"base_price": 150
 	}`)
 
 	router := setupTestRouter()

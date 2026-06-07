@@ -10,6 +10,10 @@ type Booking struct {
 	EndTime        time.Time `json:"end_time"`
 	Status         string    `json:"status"`
 	TotalAmount    float64   `json:"total_amount"`
-	PricePerNight  float64   `json:"price_per_night"`
-	IdempotencyKey string    `json:"idempotency_key,omitempty"`
+	PricePerNight float64 `json:"price_per_night"`
+}
+
+type BookingListPage struct {
+	Bookings   []Booking  `json:"bookings"`
+	Pagination Pagination `json:"pagination"`
 }

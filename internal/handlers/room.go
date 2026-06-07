@@ -18,8 +18,6 @@ func NewRoomHandler(roomService *service.RoomService, bookingService *service.Bo
 	return &RoomHandler{roomService: roomService, bookingService: bookingService}
 }
 
-// Availability returns dates in the requested window (UTC) where the room has a pending or confirmed stay night.
-// Query: optional from=YYYY-MM-DD, to=YYYY-MM-DD (defaults: from=today UTC, to=from+179 days). Responses are uncached for up-to-date availability.
 func (h *RoomHandler) Availability(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -37,12 +35,14 @@ func (h *RoomHandler) Availability(c *gin.Context) {
 		return
 	}
 
-	result, err := h.bookingService.GetRoomAvailability(c.Request.Context(), id, c.Query("from"), c.Query("to"))
+	fromDate, toDate, err := parseAvailabilityQuery(c.Query("from"), c.Query("to"))
 	if err != nil {
-		if service.IsAvailabilityValidationError(err) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": service.AvailabilityErrorMessage(err)})
-			return
-		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.bookingService.GetRoomAvailability(c.Request.Context(), id, fromDate, toDate)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load availability"})
 		return
 	}
